@@ -1,0 +1,26 @@
+[tool.poetry]
+name = "ou-representation-learning"
+version = "0.1.0"
+description = ""
+authors = ["Jay Rothenberger <35668950+JayRothenberger@users.noreply.github.com>", "Patrick Kage <p.kage@ed.ac.uk>"]
+readme = "README.md"
+packages = []
+# packages = [{include = "ou_representation_learning"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+rich = "^13.5.2"
+# torch = ">=2.0.0, !=2.0.1"
+torchvision = "^0.15.2"
+
+[tool.jupyter.kernel]
+name = "rep learning"
+display = "OU-UoE joint project"
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.25.2"
+black = "^23.9.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
