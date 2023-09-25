@@ -153,8 +153,17 @@ class SimCLR(object):
 
                 if n_iter % self.args.log_every_n_steps == 0:
                     embeds = get_embeddings(self.model, train_loader, test_loader)
-                    ll_accuracy, _  = train_linear_layer(embeds, device=0)
-                    knn_accuracy, _ = train_knn(embeds)
+                    if int(os.environ["RANK"]) == 0:
+                        ll_accuracy, _  = train_linear_layer(embeds, device=0)
+                        knn_accuracy, _ = train_knn(embeds)
+                    else:
+                        knn_accuracy, ll_accuracy = 0, 0
+
+                    agree = torch.Tensor([ll_accuracy, knn_accuracy]).to(int(os.environ["RANK"]) % torch.cuda.device_count())
+                    torch.distributed.barrier()
+                    torch.distributed.all_reduce(agree)
+                    print('agreement reduced')
+                    knn_accuracy, ll_accuracy = agree[1], agree[0]
 
                     top1, top5 = accuracy(logits, labels, topk=(1, 5))
                     data['top1'] = float(top1[0])

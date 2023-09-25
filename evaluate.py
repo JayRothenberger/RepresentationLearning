@@ -130,7 +130,7 @@ def train_linear_layer(
     # create the model
     model = RepQualityLinear(latent_width, class_count)
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
     model.to(device)
     model.train()
@@ -154,7 +154,7 @@ def train_linear_layer(
         model.eval()
         size = len(test_dataset)
         num_batches = len(test_loader)
-        test_loss, correct = 0, 0
+        test_loss, correct, total = 0, 0, 0
     
         with torch.no_grad():
             for X, y in test_loader:
@@ -166,9 +166,10 @@ def train_linear_layer(
                 pred = model(X)
                 test_loss += loss_fn(pred, y).item()
                 correct += (pred.argmax(1) == y).type(torch.float).sum().item()
+                total += (y == y).type(torch.float).sum().item()
 
         test_loss /= num_batches
-        correct /= size
+        correct /= total
         corrects.append(correct)
         print(f'Test error:\n    Accuracy: {(correct * 100):>0.1f}%, Avg loss: {test_loss:>8f}')
 
