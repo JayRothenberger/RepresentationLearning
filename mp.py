@@ -32,6 +32,9 @@ from torch.distributed.fsdp.wrap import (
     wrap,
 )
 
+import flash
+from myresnet import ResNet50
+
 
 def setup(rank, world_size):
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
@@ -42,17 +45,13 @@ def cleanup():
 
 
 def main(rank, world_size):
-    wandb.init(project='SimCLR Distances', entity='ai2es',
-        name=f"{rank}: SimCLR Test",
-        config={
-            'experiment': 'torch_test',
-        })
-    print(f"Running basic DDP example on rank {rank} with world_size {world_size}.")
+    print(f"Running FSPD SimCLR example on rank {rank} with world_size {world_size}.")
     setup(rank, world_size)
 
     transform = transforms.Compose([
                     transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                    # transforms.Resize(size=32, antialias=True),
+                    # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ])
 
     tr = torchvision.datasets.CIFAR10('../cifar-10/', train=True, download=True, transform=transform)
@@ -71,14 +70,14 @@ def main(rank, world_size):
                              shuffle=False, 
                              drop_last=True)
 
-    n_views, batch_size = 2, 512
+    n_views, batch_size = 2, 256
 
     train_loader = DataLoader(tr, batch_size=batch_size, shuffle=False, sampler=sampler_tr, pin_memory=True, num_workers=16, drop_last=True)
     valid_loader = DataLoader(val, batch_size=batch_size, shuffle=False, pin_memory=True, num_workers=16)
 
     device = torch.device(f"cuda:{rank % torch.cuda.device_count()}") if torch.cuda.is_available() else torch.device("cpu")
 
-    cnn_model = torch.hub.load('pytorch/vision:v0.10.0', 'resnet50', weights=None)
+    cnn_model = ResNet50(num_classes=512)
     torch.cuda.set_device(rank % torch.cuda.device_count())
 
     # have to send the module to the correct device first
@@ -96,11 +95,17 @@ def main(rank, world_size):
                 cast_forward_inputs=True)
             )
 
-    opt = torch.optim.AdamW(model.parameters(), lr=0.5)
+    opt = flash.core.optimizers.LARS(model.parameters(), lr=0.05, momentum=0.9, weight_decay=1e-2)
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min')
     # important to not use precision here because it is included in FSDP
-    args = {'epochs': 300, 'device': device, 'fp16_precision': False, 'disable_cuda': False, 'temperature': .1, 'n_views': n_views, 'batch_size': batch_size, 'log_every_n_steps': 100, 'arch': 'resnet50', 'distance': 'JS'}
+    args = {'epochs': 1200, 'device': device, 'fp16_precision': False, 'disable_cuda': False, 'temperature': .1, 'n_views': n_views, 'batch_size': batch_size, 'log_every_n_steps': 100, 'arch': 'resnet50', 'distance': 'JS'}
+    wandb.init(project='SimCLR Distances', entity='ai2es',
+    name=f"{rank}: SimCLR Test",
+    config={
+        'experiment': 'torch_test',
+        'args': args
+    })
     args = Namespace(**args)
 
     model = SimCLR(model=model, optimizer=opt, scheduler=scheduler, args=args)

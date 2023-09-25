@@ -3,6 +3,7 @@
 import logging
 import os
 import sys
+import wandb
 
 import torch
 import torch.nn.functional as F
@@ -26,13 +27,11 @@ class SimCLR(object):
         self.optimizer = kwargs['optimizer']
         self.scheduler = kwargs['scheduler']
 
-        assert kwargs.get('distance') in ['JS', 'InfoCE', None]
+        assert self.args.distance in ['JS', 'InfoNCE']
 
-        if kwargs.get('distance') is None:
-            self.loss_distance = self.info_nce_loss
-        elif kwargs.get('distance') == 'JS':
+        if self.args.distance == 'JS':
             self.loss_distance = self.info_JS_loss
-        elif kwargs.get('distance') == 'InfoNCE':
+        elif self.args.distance == 'InfoNCE':
             self.loss_distance = self.info_nce_loss
 
         
@@ -79,12 +78,14 @@ class SimCLR(object):
         labels = (labels.unsqueeze(0) == labels.unsqueeze(1)).float()
         labels = labels.to(self.args.device)
 
-        features = F.normalize(features, dim=1, p=1.0)
+        features = (features - features.min(1, keepdim=True)[0])/(features.max(1, keepdim=True)[0] - features.min(1, keepdim=True)[0])
 
-        lam = lambda a, b: torch.where(a*b > 0, a * torch.log2(a / b), torch.where(a > 0, -a*torch.log2(1.00001 - a), 0.0)).sum(-1)
+        # features = F.normalize(features, dim=1, p=1.0)
 
-        m = (features.unsqueeze(0) + features.unsqueeze(1)) / 2
+        lam = lambda a, b: torch.where(a*b > 0, a * torch.log2(a / b), torch.where(a > 0, -a*torch.log2(1.0000001 - a), 0.0)).sum(-1)
 
+        m = (features.unsqueeze(0) + features.unsqueeze(1))
+        
         similarity_matrix = 1.0 - ((lam(features.unsqueeze(0), m) + lam(features.unsqueeze(1), m)) / 2)
 
         # assert similarity_matrix.shape == (
@@ -122,6 +123,7 @@ class SimCLR(object):
         logging.info(f"Training with gpu: {self.args.disable_cuda}.")
 
         for epoch_counter in range(self.args.epochs):
+            data = dict()
             for images, _ in tqdm(train_loader):
                 images = images.to(self.args.device)
                 color_jitter = transforms.ColorJitter(0.8, 0.8, 0.8, 0.2)
@@ -146,19 +148,27 @@ class SimCLR(object):
                 scaler.step(self.optimizer)
                 scaler.update()
 
+
                 if n_iter % self.args.log_every_n_steps == 0:
                     top1, top5 = accuracy(logits, labels, topk=(1, 5))
+                    data['top1'] = float(top1[0])
+                    data['top5'] = float(top5[0])
+                    data['loss'] = float(loss)
+                    data['learning_rate'] = float(self.optimizer.param_groups[0]['lr'])
+                    wandb.log(data, commit=True, step=epoch_counter)
                     self.writer.add_scalar('loss', loss, global_step=n_iter)
                     self.writer.add_scalar('acc/top1', top1[0], global_step=n_iter)
                     self.writer.add_scalar('acc/top5', top5[0], global_step=n_iter)
-                    self.writer.add_scalar('learning_rate', self.optimizer.defaults['lr'], global_step=n_iter)
+                    self.writer.add_scalar('learning_rate', self.optimizer.param_groups[0]['lr'], global_step=n_iter)
+                    
 
                 n_iter += 1
 
             # warmup for the first 10 epochs
             if epoch_counter >= 10:
                 self.scheduler.step(loss)
-            print(f"Epoch: {epoch_counter}\tLoss: {loss}\tTop1 accuracy: {top1[0]}")
+            if epoch_counter:
+                print(f"Epoch: {epoch_counter}\tLoss: {loss}\tTop1 accuracy: {top1[0]}")
 
         logging.info("Training has finished.")
         # save model checkpoints
