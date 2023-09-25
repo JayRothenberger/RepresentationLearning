@@ -72,32 +72,37 @@ class RepQualityLinear(nn.Module):
 
 
 def prepare_datasets(
-    embeddings: torch.Tensor,
-    labels: torch.Tensor,
-    test_set_size: float,
+    train_embeddings: torch.Tensor,
+    train_labels: torch.Tensor,
+    test_embeddings: torch.Tensor,
+    test_labels: torch.Tensor,
 ) -> Tuple[TensorDataset, TensorDataset]:
     '''
 
-    :param test_set_size: Size of the test set as a percentage
-    :type test_set_size: float
+    :param train_embeddings: training embeddings, the xs in the train dataset tuples
+    :type train_embeddings: torch.Tensor
+    :param train_labels: training labels, the ys in the train dataset tuples
+    :type train_labels: torch.Tensor
+    :param test_embeddings: testing embeddings, the xs in the test dataset tuples
+    :type test_embeddings: torch.Tensor
+    :param test_labels: testing labels, the ys in the test dataset tuples
+    :type test_labels: torch.Tensor
     :return: 
     :rtype: Tuple[TensorDataset, TensorDataset]
     '''
-    test_set_size = math.floor(embeddings.shape[0] * test_set_size)
-
     # create the datasets and loaders
-    train_dataset = TensorDataset(embeddings[test_set_size:, :], labels[test_set_size:])
-    test_dataset = TensorDataset(embeddings[:test_set_size, :], labels[:test_set_size])
+    train_dataset = TensorDataset(train_embeddings, train_labels)
+    test_dataset = TensorDataset(test_embeddings, test_labels)
 
     return train_dataset, test_dataset
 
 
 def train_linear_layer(
     embeddings: torch.Tensor,
-    labels: torch.Tensor,
     class_count: int = 100,
     test_set_size: float = 0.10,
     device: str = 'gpu',
+    epochs=10,
 ) -> Tuple[float, RepQualityLinear]:
     '''
     Create and train a simple linear layer to evaluate embedder performance.
@@ -115,68 +120,66 @@ def train_linear_layer(
     :return: the accuracy and the trained model
     :rtype: Tuple[float, RepQualityLinear]
     '''
-    latent_width = embeddings.shape[1]
+    latent_width = embeddings[0].shape[1]
 
     # create the datasets and loaders
-    train_dataset, test_dataset = prepare_datasets(embeddings, labels, test_set_size)
-    train_loader = DataLoader(train_dataset, batch_size=64)
-    test_loader = DataLoader(train_dataset, batch_size=64)
+    train_dataset, test_dataset = prepare_datasets(*embeddings)
+    train_loader = DataLoader(train_dataset, batch_size=512)
+    test_loader = DataLoader(train_dataset, batch_size=512)
 
     # create the model
     model = RepQualityLinear(latent_width, class_count)
     loss_fn = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
-    # train loop
-    print('Beginning train...')
     model.to(device)
     model.train()
-
-    for batch, (X, y) in enumerate(train_loader):
-        X = X.to(device)
-        y = y.to(device)
-
-        pred = model(X)
-        loss = loss_fn(pred, y)
-
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
-
-        if batch % 100 == 0:
-            loss = loss.item()
-            print(f'    loss: {loss:>7f} batch:{batch}/{len(train_dataset)//train_loader.batch_size}')
-
-    # test loop
-    model.eval()
-    size = len(test_dataset)
-    num_batches = len(test_loader)
-    test_loss, correct = 0, 0
-
-    print('Evaluating model...')
-    with torch.no_grad():
-        for X, y in test_loader:
+    corrects = []
+    for epoch in range(epochs):
+        # train loop
+        for batch, (X, y) in enumerate(train_loader):
             X = X.to(device)
             y = y.to(device)
 
+            X = X.type(torch.float)
+
             pred = model(X)
-            test_loss += loss_fn(pred, y).item()
-            correct += (pred.argmax(1) == y).type(torch.float).sum().item()
+            loss = loss_fn(pred, y)
 
-    test_loss /= num_batches
-    correct /= size
-    print(f'Test error:\n    Accuracy: {(correct * 100):>0.1f}%, Avg loss: {test_loss:>8f}')
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
 
-    return correct, model
+        # test loop
+        model.eval()
+        size = len(test_dataset)
+        num_batches = len(test_loader)
+        test_loss, correct = 0, 0
+    
+        with torch.no_grad():
+            for X, y in test_loader:
+                X = X.to(device)
+                y = y.to(device)
+
+                X = X.type(torch.float)
+
+                pred = model(X)
+                test_loss += loss_fn(pred, y).item()
+                correct += (pred.argmax(1) == y).type(torch.float).sum().item()
+
+        test_loss /= num_batches
+        correct /= size
+        corrects.append(correct)
+        print(f'Test error:\n    Accuracy: {(correct * 100):>0.1f}%, Avg loss: {test_loss:>8f}')
+
+    return max(corrects), model
 
 
 def train_knn(
     embeddings: torch.Tensor,
-    labels: torch.Tensor,
-    test_set_size: float = 0.10,
     n_neighbors: int = 5
 ) -> Tuple[float, KNeighborsClassifier]:
-    train_dataset, test_dataset = prepare_datasets(embeddings, labels, test_set_size)
+    train_dataset, test_dataset = prepare_datasets(*embeddings)
     
     train_X = np.array(train_dataset.tensors[0])
     train_y = np.array(train_dataset.tensors[1])

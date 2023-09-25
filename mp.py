@@ -73,7 +73,7 @@ def main(rank, world_size):
     n_views, batch_size = 2, 256
 
     train_loader = DataLoader(tr, batch_size=batch_size, shuffle=False, sampler=sampler_tr, pin_memory=True, num_workers=16, drop_last=True)
-    valid_loader = DataLoader(val, batch_size=batch_size, shuffle=False, pin_memory=True, num_workers=16)
+    valid_loader = DataLoader(val, batch_size=batch_size, shuffle=False, sampler=sampler_val, pin_memory=True, num_workers=16)
 
     device = torch.device(f"cuda:{rank % torch.cuda.device_count()}") if torch.cuda.is_available() else torch.device("cpu")
 
@@ -89,7 +89,7 @@ def main(rank, world_size):
     model = FSDP(cnn_model, 
             auto_wrap_policy=auto_wrap_policy,
             mixed_precision=torch.distributed.fsdp.MixedPrecision(
-                param_dtype=torch.float32, 
+                param_dtype=torch.float16, 
                 reduce_dtype=torch.float32, 
                 buffer_dtype=torch.float32, 
                 cast_forward_inputs=True)
@@ -99,7 +99,7 @@ def main(rank, world_size):
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min')
     # important to not use precision here because it is included in FSDP
-    args = {'epochs': 1200, 'device': device, 'fp16_precision': False, 'disable_cuda': False, 'temperature': .1, 'n_views': n_views, 'batch_size': batch_size, 'log_every_n_steps': 100, 'arch': 'resnet50', 'distance': 'JS'}
+    args = {'epochs': 1200, 'device': device, 'fp16_precision': False, 'disable_cuda': False, 'temperature': .1, 'n_views': n_views, 'batch_size': batch_size, 'log_every_n_steps': 100, 'arch': 'resnet50', 'distance': 'InfoNCE'}
     wandb.init(project='SimCLR Distances', entity='ai2es',
     name=f"{rank}: SimCLR Test",
     config={
@@ -109,7 +109,7 @@ def main(rank, world_size):
     args = Namespace(**args)
 
     model = SimCLR(model=model, optimizer=opt, scheduler=scheduler, args=args)
-    model.train(train_loader)
+    model.train(train_loader, valid_loader)
 
     cleanup()
 

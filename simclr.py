@@ -15,8 +15,8 @@ from utils import save_config_file, accuracy, save_checkpoint
 from torchvision.transforms import transforms
 from torchvision import transforms, datasets
 
-
-torch.manual_seed(0)
+from utils import get_embeddings
+from evaluate import train_linear_layer, train_knn
 
 
 class SimCLR(object):
@@ -111,7 +111,7 @@ class SimCLR(object):
         return logits, labels
 
 
-    def train(self, train_loader):
+    def train(self, train_loader, test_loader):
 
         scaler = GradScaler(enabled=self.args.fp16_precision)
 
@@ -148,12 +148,20 @@ class SimCLR(object):
                 scaler.step(self.optimizer)
                 scaler.update()
 
+                # TODO: evaluations here
+
 
                 if n_iter % self.args.log_every_n_steps == 0:
+                    embeds = get_embeddings(self.model, train_loader, test_loader)
+                    ll_accuracy, _  = train_linear_layer(embeds, device=0)
+                    knn_accuracy, _ = train_knn(embeds)
+
                     top1, top5 = accuracy(logits, labels, topk=(1, 5))
                     data['top1'] = float(top1[0])
                     data['top5'] = float(top5[0])
                     data['loss'] = float(loss)
+                    data['knn'] = float(knn_accuracy)
+                    data['linear'] = float(ll_accuracy)
                     data['learning_rate'] = float(self.optimizer.param_groups[0]['lr'])
                     wandb.log(data, commit=True, step=epoch_counter)
                     self.writer.add_scalar('loss', loss, global_step=n_iter)
