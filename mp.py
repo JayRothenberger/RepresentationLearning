@@ -80,13 +80,13 @@ def main(rank, world_size):
     class MyModel(torch.nn.Module):
         def __init__(self):
             super(MyModel, self).__init__()
-            self.layers = torch.nn.ModuleList([ResNet50(num_classes=512), torch.nn.Flatten(), torch.nn.ReLU(), torch.nn.Linear(512, 512), torch.nn.Linear(512, 128)])
+            self.layers = torch.nn.ModuleList([ResNet50(num_classes=512), torch.nn.Flatten(), torch.nn.ReLU(), torch.nn.Linear(512, 256), torch.nn.Linear(256, 128)])
 
         
         def forward(self, x):
             x = self.layers[1](self.layers[0](x))
 
-            return x, self.layers[-1](self.layers[2](self.layers[-2](x))), self.layers[-1](self.layers[2](self.layers[-2](x)))
+            return x, self.layers[-1](self.layers[2](self.layers[-2](x)))
 
 
     cnn_model = MyModel()
