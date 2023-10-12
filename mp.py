@@ -70,14 +70,27 @@ def main(rank, world_size):
                              shuffle=False, 
                              drop_last=True)
 
-    n_views, batch_size = 2, 256
+    n_views, batch_size = 2, 512
 
     train_loader = DataLoader(tr, batch_size=batch_size, shuffle=False, sampler=sampler_tr, pin_memory=True, num_workers=16, drop_last=True)
     valid_loader = DataLoader(val, batch_size=batch_size, shuffle=False, sampler=sampler_val, pin_memory=True, num_workers=16)
 
     device = torch.device(f"cuda:{rank % torch.cuda.device_count()}") if torch.cuda.is_available() else torch.device("cpu")
 
-    cnn_model = ResNet50(num_classes=512)
+    class MyModel(torch.nn.Module):
+        def __init__(self):
+            super(MyModel, self).__init__()
+            self.layers = torch.nn.ModuleList([ResNet50(num_classes=512), torch.nn.Flatten(), torch.nn.ReLU(), torch.nn.Linear(512, 512), torch.nn.Linear(512, 128)])
+
+        
+        def forward(self, x):
+            x = self.layers[1](self.layers[0](x))
+
+            return x, self.layers[-1](self.layers[2](self.layers[-2](x))), self.layers[-1](self.layers[2](self.layers[-2](x)))
+
+
+    cnn_model = MyModel()
+
     torch.cuda.set_device(rank % torch.cuda.device_count())
 
     # have to send the module to the correct device first
@@ -95,9 +108,9 @@ def main(rank, world_size):
                 cast_forward_inputs=True)
             )
 
-    opt = flash.core.optimizers.LARS(model.parameters(), lr=0.05, momentum=0.9, weight_decay=1e-2)
+    opt = flash.core.optimizers.LARS(model.parameters(), lr=1.5, momentum=0.9, weight_decay=1e-2)
 
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min')
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, 'min', factor=0.5, patience=20)
     # important to not use precision here because it is included in FSDP
     args = {'epochs': 1200, 'device': device, 'fp16_precision': False, 'disable_cuda': False, 'temperature': .1, 'n_views': n_views, 'batch_size': batch_size, 'log_every_n_steps': 100, 'arch': 'resnet50', 'distance': 'InfoNCE'}
     wandb.init(project='SimCLR Distances', entity='ai2es',

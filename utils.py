@@ -16,7 +16,7 @@ def get_embeddings(model, loader, val_loader):
     gc.collect()
     with torch.no_grad():
         for images, labels in tqdm(loader):
-            local_embeds = model(images)
+            local_embeds, _ = model(images)
             labels = labels.to(int(os.environ["RANK"]) % torch.cuda.device_count())
             world_embeds = [local_embeds for i in range(int(os.environ["WORLD_SIZE"]))]
             world_labels = [labels for i in range(int(os.environ["WORLD_SIZE"]))]
@@ -32,7 +32,7 @@ def get_embeddings(model, loader, val_loader):
     gc.collect()
     with torch.no_grad():
         for images, labels in tqdm(val_loader):
-            local_embeds = model(images)
+            local_embeds, _ = model(images)
             labels = labels.to(int(os.environ["RANK"]) % torch.cuda.device_count())
             world_embeds = [local_embeds for i in range(int(os.environ["WORLD_SIZE"]))]
             world_labels = [labels for i in range(int(os.environ["WORLD_SIZE"]))]

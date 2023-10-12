@@ -102,7 +102,7 @@ def train_linear_layer(
     class_count: int = 100,
     test_set_size: float = 0.10,
     device: str = 'gpu',
-    epochs=10,
+    epochs=25,
 ) -> Tuple[float, RepQualityLinear]:
     '''
     Create and train a simple linear layer to evaluate embedder performance.
