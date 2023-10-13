@@ -17,6 +17,25 @@ from torchvision import transforms, datasets
 
 from utils import get_embeddings
 from evaluate import train_linear_layer, train_knn
+import torch.distributed as dist
+
+# https://github.com/Spijkervet/SimCLR/blob/master/simclr/modules/gather.py
+class GatherLayer(torch.autograd.Function):
+    """Gather tensors from all process, supporting backward propagation."""
+
+    @staticmethod
+    def forward(ctx, input):
+        ctx.save_for_backward(input)
+        output = [torch.zeros_like(input) for _ in range(dist.get_world_size())]
+        dist.all_gather(output, input)
+        return tuple(output)
+
+    @staticmethod
+    def backward(ctx, *grads):
+        (input,) = ctx.saved_tensors
+        grad_out = torch.zeros_like(input)
+        grad_out[:] = grads[dist.get_rank()]
+        return grad_out
 
 
 class SimCLR(object):
@@ -38,6 +57,7 @@ class SimCLR(object):
         self.writer = SummaryWriter()
         logging.basicConfig(filename=os.path.join(self.writer.log_dir, 'training.log'), level=logging.DEBUG)
         self.criterion = torch.nn.CrossEntropyLoss().to(self.args.device)
+        self.all_gather = GatherLayer()
 
     def info_nce_loss(self, features):
         labels = torch.cat([torch.arange(self.args.batch_size * int(os.environ["WORLD_SIZE"])) for i in range(self.args.n_views)], dim=0)
@@ -150,16 +170,22 @@ class SimCLR(object):
                 with autocast(enabled=self.args.fp16_precision):
                     _, features = self.model(images)
                     
-                    tensor_list = [features for i in range(int(os.environ["WORLD_SIZE"]))]
+                    # tensor_list = [torch.zeros(features.shape, dtype=torch.float16).cuda() for i in range(int(os.environ["WORLD_SIZE"]))]
 
-                    torch.distributed.all_gather(tensor_list, features)
+                    tensor_list = self.all_gather.apply(features)
 
-                    features = torch.cat(tensor_list)
+                    for i in range(len(tensor_list)):
+                        print(i)
+                        assert torch.equal(torch.zeros(features.shape, dtype=torch.float16).cuda(), tensor_list[i]) == False
+
+                    tensor_list = [torch.split(t, self.args.batch_size) for t in tensor_list]
+
+                    features = torch.cat([torch.cat([t[i] for t in tensor_list]) for i in range(self.args.n_views)])
 
                     logits, labels = self.loss_distance(features)
                     loss = self.criterion(logits, labels)
 
-                torch.distributed.all_reduce(loss)
+                torch.distributed.all_reduce(loss, torch.distributed.ReduceOp.AVG)
                 self.optimizer.zero_grad()
 
                 scaler.scale(loss).backward()
