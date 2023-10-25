@@ -3,6 +3,7 @@
 import logging
 import os
 import sys
+from typing import Callable, Tuple
 import wandb
 
 import torch
@@ -18,6 +19,8 @@ from torchvision import transforms, datasets
 from utils import get_embeddings
 from evaluate import train_linear_layer, train_knn
 import torch.distributed as dist
+
+from distances import batch_pseudo_huber_l1, batch_minkowski_distance
 
 # https://github.com/Spijkervet/SimCLR/blob/master/simclr/modules/gather.py
 class GatherLayer(torch.autograd.Function):
@@ -46,12 +49,25 @@ class SimCLR(object):
         self.optimizer = kwargs['optimizer']
         self.scheduler = kwargs['scheduler']
 
-        assert self.args.distance in ['JS', 'InfoNCE']
+        # select the appropriate loss fn
+        assert self.args.distance in ['JS', 'InfoNCE', 'dist:pseudohuber', 'dist:L1', 'dist:L2']
+        self.loss_distance_metric_args = {}
 
         if self.args.distance == 'JS':
             self.loss_distance = self.info_JS_loss
         elif self.args.distance == 'InfoNCE':
             self.loss_distance = self.info_nce_loss
+        elif self.args.distance == 'dist:pseudohuber':
+            self.loss_distance = self.info_distance_generic
+            self.loss_distance_metric = batch_pseudo_huber_l1
+        elif self.args.distance == 'dist:L1':
+            self.loss_distance = self.info_distance_generic
+            self.loss_distance_metric = batch_minkowski_distance
+            self.loss_distance_metric_args['p'] = 1.0
+        elif self.args.distance == 'dist:L2':
+            self.loss_distance = self.info_distance_generic
+            self.loss_distance_metric = batch_minkowski_distance
+            self.loss_distance_metric_args['p'] = 2.0
 
         
         self.writer = SummaryWriter()
@@ -129,6 +145,44 @@ class SimCLR(object):
 
         logits = logits / self.args.temperature
         return logits, labels
+
+
+    def info_distance_generic(self, features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Generic plumbing for most absolute-distance loss functions. Calls
+        self.loss_distance_metric with kwargs self.loss_distance_metric_args.
+
+        :param features: latent representations tensor
+        :type features: torch.Tensor
+        :return: logits and labels
+        :rtype: Tuple[torch.Tensor, torch.Tensor]
+        """
+        labels = torch.cat([torch.arange(self.args.batch_size) for _ in range(self.args.n_views)], dim=0)
+        labels = (labels.unsqueeze(0) == labels.unsqueeze(1)).float()
+        labels = labels.to(self.args.device)
+
+        # call the distance function
+        similarity_matrix = self.loss_distance_metric(features, **self.loss_distance_metric_args)
+
+        # discard the main diagonal from both: labels and similarities matrix
+        mask = torch.eye(labels.shape[0], dtype=torch.bool).to(self.args.device)
+        labels = labels[~mask].view(labels.shape[0], -1)
+        similarity_matrix = similarity_matrix[~mask].view(similarity_matrix.shape[0], -1)
+        # assert similarity_matrix.shape == labels.shape
+
+        # select and combine multiple positives
+        positives = similarity_matrix[labels.bool()].view(labels.shape[0], -1)
+
+        # select only the negatives
+        negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
+
+        logits = torch.cat([positives, negatives], dim=1)
+        labels = torch.zeros(logits.shape[0], dtype=torch.long).to(self.args.device)
+
+        logits = logits / self.args.temperature
+        return logits, labels
+        
+
 
 
     def train(self, train_loader, labeled_loader, test_loader=None):
